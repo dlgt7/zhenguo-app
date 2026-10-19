@@ -25,6 +25,7 @@ import android.net.Uri
 import android.provider.Settings
 import android.util.Rational
 import android.view.InputDevice
+import android.view.KeyEvent
 import android.view.WindowManager
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -34,6 +35,7 @@ class MainActivity : FlutterActivity() {
     private var thermalHeadroom: Double? = null
     private var deviceChannel: MethodChannel? = null
     private var televisionMode = false
+    private var televisionPlaybackActive = false
     private var pictureInPictureAutoEnter = false
     private var pictureInPictureAspectWidth = 1600
     private var pictureInPictureAspectHeight = 900
@@ -68,6 +70,25 @@ class MainActivity : FlutterActivity() {
                 device != null && !device.isVirtual && device.supportsSource(InputDevice.SOURCE_DPAD)
             }
         return remoteNavigation || packageManager.hasSystemFeature(PackageManager.FEATURE_LIVE_TV)
+    }
+
+    private fun forwardTelevisionBack(): Boolean {
+        if (!televisionPlaybackActive || deviceChannel == null ||
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode)) {
+            return false
+        }
+        deviceChannel?.invokeMethod("televisionBackPressed", null)
+        return true
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (televisionPlaybackActive && deviceChannel != null &&
+            (event.keyCode == KeyEvent.KEYCODE_BACK || event.keyCode == KeyEvent.KEYCODE_ESCAPE) &&
+            (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || !isInPictureInPictureMode)) {
+            if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) forwardTelevisionBack()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun setRequestedOrientation(requestedOrientation: Int) {
@@ -222,6 +243,10 @@ class MainActivity : FlutterActivity() {
                                 }
                                 result.success(null)
                             }
+                        }
+                        "setTelevisionPlaybackActive" -> {
+                            televisionPlaybackActive = call.argument<Boolean>("active") == true
+                            result.success(null)
                         }
                         "playbackPower" -> result.success(runCatching { playbackPower() }.getOrNull())
                         "vpnActive" -> result.success(runCatching { vpnActive() }.getOrDefault(false))
