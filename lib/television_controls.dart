@@ -150,8 +150,7 @@ class TelevisionControlsState extends State<TelevisionControls> {
     });
   }
 
-  void _reportVisibility() =>
-      widget.onVisibilityChanged?.call(_visible);
+  void _reportVisibility() => widget.onVisibilityChanged?.call(_visible);
 
   void _hide() {
     _hideTimer?.cancel();
