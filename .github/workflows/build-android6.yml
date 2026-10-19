@@ -54,12 +54,12 @@ jobs:
           python scripts/prepare_android6_toolchain.py
           python scripts/prepare_android6_sources.py
       - name: Configure Android signing
-        run: python scripts/configure_signing.py ${{ steps.metadata.outputs.release == 'true' && '--require-release' || '' }}
+        run: python scripts/configure_signing.py --edition hongguojian ${{ steps.metadata.outputs.release == 'true' && '--require-release' || '' }}
         env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_HONGGUOJIAN_KEYSTORE_BASE64: ${{ secrets.ANDROID_HONGGUOJIAN_KEYSTORE_BASE64 }}
+          ANDROID_HONGGUOJIAN_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_HONGGUOJIAN_KEYSTORE_PASSWORD }}
+          ANDROID_HONGGUOJIAN_KEY_ALIAS: ${{ secrets.ANDROID_HONGGUOJIAN_KEY_ALIAS }}
+          ANDROID_HONGGUOJIAN_KEY_PASSWORD: ${{ secrets.ANDROID_HONGGUOJIAN_KEY_PASSWORD }}
       - run: python scripts/build_android6.py
       - name: Remove signing files
         if: always()
