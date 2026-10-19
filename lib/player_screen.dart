@@ -107,6 +107,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   late final PlayerInteractions _interactions;
   final _playerFocus = FocusNode(debugLabel: 'player-surface');
   final _videoPaneKey = GlobalKey();
+  final _televisionControls = GlobalKey<TelevisionControlsState>();
+  bool _televisionOverlayVisible = false;
   final _menuRevision = ValueNotifier<int>(0);
   final _screenAwake = ScreenAwake();
   late final SleepTimerController _sleepTimer;
@@ -151,6 +153,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _pictureInPictureActive = false;
   bool _pictureInPictureRequested = false;
   bool _pictureInPictureHandlerInstalled = false;
+  bool _televisionPlaybackRegistered = false;
   String? _pictureInPictureSyncKey;
   bool? _pictureInPicturePreference;
   DateTime? _lastBackAt;
@@ -565,10 +568,34 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  void _setTelevisionPlaybackActive(bool active) {
+    if (!_pictureInPictureHandlerInstalled ||
+        active == _televisionPlaybackRegistered) {
+      return;
+    }
+    _televisionPlaybackRegistered = active;
+    unawaited(
+      AppDevice.channel
+          .invokeMethod<void>('setTelevisionPlaybackActive', {'active': active})
+          .catchError((Object _) {}),
+    );
+  }
+
   void _configurePictureInPicture() {
     if (defaultTargetPlatform != TargetPlatform.android) return;
     _pictureInPictureHandlerInstalled = true;
     AppDevice.channel.setMethodCallHandler((call) async {
+      if (call.method == 'televisionBackPressed' &&
+          _television &&
+          mounted &&
+          !_closed) {
+        if (!(ModalRoute.of(context)?.isCurrent ?? true)) {
+          await Navigator.of(context).maybePop();
+        } else {
+          _back();
+        }
+        return;
+      }
       if (call.method == 'pictureInPictureChanged') {
         final arguments = call.arguments;
         final active = arguments is Map && arguments['active'] == true;
@@ -1027,6 +1054,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _interactions.cancel();
     }
     _television = television;
+    _setTelevisionPlaybackActive(_television);
     _orientationController = AppOrientationScope.maybeOf(context);
     final orientation = MediaQuery.orientationOf(context);
     if (_lastOrientation != null && _lastOrientation != orientation) {
@@ -1961,7 +1989,12 @@ class _PlayerScreenState extends State<PlayerScreen>
       return;
     }
     _lastBackAt = now;
-    if (_showFullscreen && !_television) {
+    if (_television) {
+      if (_televisionControls.currentState?.handleBack() ?? false) return;
+      Navigator.of(context).maybePop();
+      return;
+    }
+    if (_showFullscreen) {
       _rotate();
     } else {
       Navigator.of(context).maybePop();
@@ -1974,6 +2007,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _sleepTimer.removeListener(_sleepTimerChanged);
     _sleepTimer.dispose();
     _closed = true;
+    _setTelevisionPlaybackActive(false);
     _screenAwake.disable();
     _routeAnimation?.removeStatusListener(_onRouteAnimationStatus);
     _routeAnimation = null;
@@ -2070,8 +2104,14 @@ class _PlayerScreenState extends State<PlayerScreen>
     final fullscreen = _showFullscreen;
     final pictureInPicture = _pictureInPictureVisible;
     return PopScope(
-      canPop: _television || !fullscreen || _error != null,
+      canPop: _television
+          ? !_televisionOverlayVisible
+          : (!fullscreen || _error != null),
       onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _television) {
+          _televisionControls.currentState?.handleBack();
+          return;
+        }
         if (!didPop && fullscreen && !_television) {
           _rotate();
         }
@@ -2181,6 +2221,12 @@ class _PlayerScreenState extends State<PlayerScreen>
         ? const SizedBox.shrink()
         : _television
         ? TelevisionControls(
+            key: _televisionControls,
+            onVisibilityChanged: (visible) {
+              if (_televisionOverlayVisible != visible) {
+                setState(() => _televisionOverlayVisible = visible);
+              }
+            },
             player: _player,
             title: widget.detail.drama.title,
             subtitle: episodeLabel,

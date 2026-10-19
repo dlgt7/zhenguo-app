@@ -36,6 +36,7 @@ class TelevisionControls extends StatefulWidget {
     this.subtitle,
     this.episodeNumber,
     this.episodeCount,
+    this.onVisibilityChanged,
   });
   final Player player;
   final String title;
@@ -57,12 +58,13 @@ class TelevisionControls extends StatefulWidget {
   final Future<void> Function()? onDanmaku;
   final Future<void> Function()? onDanmakuSettings;
   final VideoEnhancementController? enhancement;
+  final ValueChanged<bool>? onVisibilityChanged;
 
   @override
-  State<TelevisionControls> createState() => _TelevisionControlsState();
+  State<TelevisionControls> createState() => TelevisionControlsState();
 }
 
-class _TelevisionControlsState extends State<TelevisionControls> {
+class TelevisionControlsState extends State<TelevisionControls> {
   final _surface = FocusNode(debugLabel: 'tv-player-surface');
   final _play = FocusNode(debugLabel: 'tv-player-play');
   final _episodes = FocusNode(debugLabel: 'tv-player-episodes');
@@ -148,10 +150,35 @@ class _TelevisionControlsState extends State<TelevisionControls> {
     });
   }
 
+  void _reportVisibility() =>
+      widget.onVisibilityChanged?.call(_visible);
+
+  void _hide() {
+    _hideTimer?.cancel();
+    _seekTimer?.cancel();
+    setState(() {
+      _visible = false;
+      _seekHint = false;
+    });
+    _reportVisibility();
+    _focus(_surface);
+  }
+
+  bool handleBack() {
+    if (!widget.enabled || _panelOpen || (!_visible && !_seekHint)) {
+      return false;
+    }
+    _hide();
+    return true;
+  }
+
   void _show() {
     final needsFocus =
         !_visible || !_surface.hasFocus || _surface.hasPrimaryFocus;
-    if (!_visible) setState(() => _visible = true);
+    if (!_visible) {
+      setState(() => _visible = true);
+      _reportVisibility();
+    }
     if (needsFocus) _focus(_play);
     _scheduleHide();
   }
@@ -165,6 +192,7 @@ class _TelevisionControlsState extends State<TelevisionControls> {
           !_panelOpen &&
           widget.player.state.playing) {
         setState(() => _visible = false);
+        _reportVisibility();
         if (_surface.hasFocus) _focus(_surface);
       }
     });

@@ -539,14 +539,41 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _televisionBack() {
+  Future<void> _televisionBack() async {
     if (_selectionMode) {
       _cancelSelection();
-    } else if (_tab != _tabDiscover) {
+      return;
+    }
+    if (_tab != _tabDiscover) {
       setState(() => _tab = 0);
-    } else if (_search.text.isNotEmpty) {
+      return;
+    }
+    if (_search.text.isNotEmpty) {
       _search.clear();
       _searchChanged('');
+      return;
+    }
+    if (!mounted) return;
+    final shouldExit = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('退出应用'),
+        content: const Text('确定要退出应用吗？'),
+        actions: [
+          TextButton(
+            autofocus: true,
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('退出'),
+          ),
+        ],
+      ),
+    );
+    if (shouldExit == true && mounted) {
+      await SystemNavigator.pop();
     }
   }
 
@@ -1537,8 +1564,7 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         }
         return PopScope(
-          canPop:
-              !_selectionMode && _tab == _tabDiscover && _search.text.isEmpty,
+          canPop: false,
           onPopInvokedWithResult: (didPop, result) {
             if (!didPop) _televisionBack();
           },
