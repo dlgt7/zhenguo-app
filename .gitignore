@@ -9,7 +9,7 @@ android/app/src/main/jniLibs/
 native/build/
 windows/runner/duanju_core.dll
 *.log
-*.jks
+
 *.keystore
 __pycache__/
 *.pyc
