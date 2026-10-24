@@ -34,6 +34,8 @@ type Config struct {
 	DSDURL           string
 	IkanbotURL       string
 	A123URL          string
+	XiaopingguoURL   string
+	MiguoHoneyURL    string
 	Token            string
 	AESKeyHex        string
 	InterfaceKey     string
@@ -72,6 +74,10 @@ type Downloader struct {
 	previewSessions        map[string]*huangguoPreviewSession
 	filmSessionOnce        sync.Once
 	filmSession            *Downloader
+	xiaopingguoOnce        sync.Once
+	xiaopingguoDevice      string
+	xiaopingguoDeviceError error
+	miguoHoney             miguoHoneySession
 }
 
 func defaultConfig() Config { return Config{MaxPagesPerSort: 50, PageSize: 30, Retries: 2} }
@@ -125,14 +131,15 @@ type nativeInput struct {
 }
 
 type nativeCatalogResult struct {
-	Items       []nativeDrama `json:"items"`
-	HasMore     bool          `json:"hasMore"`
-	Page        int           `json:"page"`
-	Warning     string        `json:"warning,omitempty"`
-	LocalSearch bool          `json:"localSearch"`
-	Fresh       bool          `json:"fresh"`
-	hongguo     *hongguoCatalogState
-	saveError   error
+	Items         []nativeDrama `json:"items"`
+	HasMore       bool          `json:"hasMore"`
+	Page          int           `json:"page"`
+	Warning       string        `json:"warning,omitempty"`
+	LocalSearch   bool          `json:"localSearch"`
+	Fresh         bool          `json:"fresh"`
+	hongguo       *hongguoCatalogState
+	saveError     error
+	immediateSave bool
 }
 
 type nativePlan struct {
@@ -279,6 +286,9 @@ func newNativeEngine(directory string) (*nativeEngine, error) {
 			}
 			if len(via) > 0 && !strings.EqualFold(request.URL.Host, via[0].URL.Host) {
 				request.Header.Del("X-Preview-Token")
+				for _, header := range []string{"X-Hp-Sid", "X-Hp-Ts", "X-Hp-Nonce", "X-Hp-Sign", "publicParams"} {
+					request.Header.Del(header)
+				}
 			}
 			return nil
 		}}
@@ -382,7 +392,7 @@ func nativeDispatch(input nativeInput) (any, error) {
 			nativeState.engine = engine
 		}
 		nativeState.Unlock()
-		version := "0.2.174"
+		version := "0.2.183"
 		return map[string]any{"version": version, "standalone": true, "allSources": buildAllSources == "true", "capabilitySchema": 1, "sources": nativeCapabilities(version)}, nil
 	}
 	engine := nativeState.engine
@@ -578,6 +588,7 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 	}
 	page := max(1, input.Page)
 	query := strings.TrimSpace(input.Query)
+	fullScan, _ := ctx.Value(libraryScanKey{}).(bool)
 	if query == "" {
 		if retried, err := engine.retryCatalogSave(); retried {
 			cached := engine.nativeCached(cacheKey)
@@ -592,7 +603,7 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		}
 	}
 	d := engine.downloader
-	result := nativeCatalogResult{Items: []nativeDrama{}, Page: page}
+	result := nativeCatalogResult{Items: []nativeDrama{}, Page: page, immediateSave: source == sourceHongguo && fullScan}
 	if query != "" && source == sourceHongguo {
 		entry, hasMore, err := d.searchHongguoDramasPaged(ctx, query, page)
 		if err != nil {
@@ -650,13 +661,21 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 	if query != "" && isFilmProviderSource(source) {
 		var items []Drama
 		var err error
-		if source == sourceIkanbot {
+		switch source {
+		case sourceXiaopingguo:
+			items, result.HasMore, err = d.fetchXiaopingguoCatalogPage(ctx, page, "", query)
+		case sourceMiguoHoney:
+			items, result.HasMore, err = d.fetchMiguoHoneyCatalogPage(ctx, page, "", query)
+		case sourceIkanbot:
 			items, result.HasMore, err = d.fetchIkanbotCatalogPage(ctx, page, "", query)
-		} else {
+		case sourceA123:
 			items, result.HasMore, err = d.fetchA123CatalogPage(ctx, page, "", query)
 		}
-		if err != nil {
+		if err != nil && len(items) == 0 {
 			return result, err
+		}
+		if err != nil {
+			result.Warning = publicError(err).Error()
 		}
 		for _, drama := range items {
 			result.Items = append(result.Items, nativeNormalize(drama))
@@ -723,7 +742,7 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		if category != "" && state != nil {
 			result.HasMore = !state.Feeds["category:"+category].Exhausted
 		}
-		if len(items) == 0 && err != nil && ctx.Err() == nil && (category == "" || category == "short_play") {
+		if !fullScan && len(items) == 0 && err != nil && ctx.Err() == nil && (category == "" || category == "short_play") {
 			var totalPages int
 			items, totalPages, err = d.fetchHongguoCategoryPage(ctx, "real-drama?page="+strconv.Itoa(page), "真人剧")
 			result.HasMore = page < totalPages
@@ -753,6 +772,10 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		items, result.HasMore, err = d.fetchIkanbotCatalogPage(ctx, page, category, "")
 	case sourceA123:
 		items, result.HasMore, err = d.fetchA123CatalogPage(ctx, page, category, "")
+	case sourceXiaopingguo:
+		items, result.HasMore, err = d.fetchXiaopingguoCatalogPage(ctx, page, category, "")
+	case sourceMiguoHoney:
+		items, result.HasMore, err = d.fetchMiguoHoneyCatalogPage(ctx, page, category, "")
 	case sourceHuangguoVideo:
 		address := fmt.Sprintf("%s/videos?page=%d", d.providerBaseURL(source), page)
 		if category != "" {
@@ -772,9 +795,15 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		}
 	}
 	if err != nil && len(items) == 0 {
+		if source == sourceHongguo && fullScan && result.hongguo != nil {
+			result.Warning = publicError(err).Error()
+			engine.saveCatalogCache(cacheKey, &result)
+			return result, errors.Join(err, result.saveError)
+		}
 		return result, err
 	}
-	if len(items) == 0 && page == 1 && source != sourceHuangju && source != sourceYeguo && source != sourceDSD && !isDuanjuProviderSource(source) && !isFilmProviderSource(source) {
+	emptyHongguoScan := source == sourceHongguo && fullScan && result.hongguo != nil && !result.HasMore
+	if len(items) == 0 && page == 1 && !emptyHongguoScan && source != sourceHuangju && source != sourceYeguo && source != sourceDSD && !isDuanjuProviderSource(source) && !isFilmProviderSource(source) {
 		return result, errors.New("站源暂未返回剧集，请稍后刷新")
 	}
 	if err != nil {
@@ -818,6 +847,10 @@ func (engine *nativeEngine) nativeDetail(ctx context.Context, drama nativeDrama)
 		raw, chapters, err = engine.downloader.fetchIkanbotDetail(ctx, sourceID)
 	case sourceA123:
 		raw, chapters, err = engine.downloader.fetchA123Detail(ctx, sourceID)
+	case sourceXiaopingguo:
+		raw, chapters, err = engine.downloader.fetchXiaopingguoDetail(ctx, sourceID)
+	case sourceMiguoHoney:
+		raw, chapters, err = engine.downloader.fetchMiguoHoneyDetail(ctx, sourceID)
 	default:
 		if isDuanjuProviderSource(source) {
 			raw, chapters, err = engine.downloader.fetchDuanjuDetail(ctx, source, sourceID)
@@ -875,6 +908,9 @@ func (engine *nativeEngine) nativeResolve(ctx context.Context, input nativeInput
 	media, err := engine.downloader.resolveProviderMedia(ctx, task)
 	if err != nil {
 		return nativePlan{}, err
+	}
+	if sourceFromDramaID(input.Drama.ID) == sourceXiaopingguo {
+		media = engine.downloader.prepareXiaopingguoPlayback(ctx, media)
 	}
 	choice := nativePlaybackChoices(media, input.Quality)
 	if source := sourceFromDramaID(input.Drama.ID); isFilmProviderSource(source) {

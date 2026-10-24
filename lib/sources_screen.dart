@@ -77,7 +77,9 @@ class _SourcesScreenState extends State<SourcesScreen> {
     unawaited(_refresh());
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       _ticks++;
-      if (_statuses.values.any((status) => status.retryAt != null)) {
+      if (_statuses.values.any(
+        (status) => status.running || status.retryAt != null,
+      )) {
         setState(() {});
       }
       if (_ticks % 2 == 0 &&
@@ -261,7 +263,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
                   const Padding(
                     padding: EdgeInsets.only(bottom: 16),
                     child: Text(
-                      '各站源可分别更新和检测。更新会查找新剧、继续加载一页历史内容，并分批补齐资料；离开此页后任务继续。',
+                      '各站源可分别更新和检测。红果更新会续扫未完成的目录，上一轮结束后重新扫描；已收录剧目保留。其他站源沿用分页更新，离开此页后任务继续。',
                     ),
                   ),
                   if (sources.isEmpty)
@@ -319,10 +321,8 @@ class _SourcesScreenState extends State<SourcesScreen> {
                 source.capabilities!.labels.join(' · '),
                 style: Theme.of(context).textTheme.bodySmall,
               ),
-            if (status != null && status.count > 0)
-              Text(
-                '已加载至第 ${status.page} 页${status.hasMore ? ' · 可继续加载' : ' · 当前分页已加载完'}',
-              ),
+            if (status != null && (source.id == 'hongguo' || status.count > 0))
+              Text(status.catalogSummary),
             const SizedBox(height: 12),
             Wrap(
               spacing: 10,
@@ -360,8 +360,14 @@ class _SourcesScreenState extends State<SourcesScreen> {
                     PopupMenuItem(
                       value: 'more',
                       enabled: status?.hasMore ?? true,
-                      child: const Text('继续加载一页'),
+                      child: Text(source.id == 'hongguo' ? '继续加载一批' : '继续加载一页'),
                     ),
+                    if (source.id == 'hongguo')
+                      const PopupMenuItem(
+                        key: ValueKey('rescan-hongguo'),
+                        value: 'rescan',
+                        child: Text('重新扫描目录'),
+                      ),
                     const PopupMenuItem(value: 'metadata', child: Text('补齐资料')),
                     if (source.id == 'huangdou')
                       PopupMenuItem(
@@ -380,14 +386,20 @@ class _SourcesScreenState extends State<SourcesScreen> {
             if (busy) ...[
               const SizedBox(height: 12),
               LinearProgressIndicator(
-                value: status != null && status.total > 0
+                value:
+                    status != null &&
+                        status.running &&
+                        !status.scanningCatalog &&
+                        status.total > 0
                     ? (status.completed / status.total).clamp(0, 1)
                     : null,
               ),
               const SizedBox(height: 8),
               Text(
-                '${status?.stage ?? '准备中'}${(status?.total ?? 0) > 0 ? ' · ${status!.completed}/${status.total}' : ''}',
+                '${status?.stage ?? '准备中'}${status?.running == true && status?.scanningCatalog == false && (status?.total ?? 0) > 0 ? ' · ${status!.completed}/${status.total}' : ''}',
               ),
+              if (status?.scanningCatalog == true)
+                _catalogScanProgress(status!),
             ] else if (status != null && status.stage.isNotEmpty) ...[
               const SizedBox(height: 12),
               Text(
@@ -540,6 +552,40 @@ class _SourcesScreenState extends State<SourcesScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _catalogScanProgress(SourceStatus status) {
+    final scan = status.catalogScan!;
+    final seconds = status.startedAt == null
+        ? 0
+        : DateTime.now()
+              .difference(status.startedAt!)
+              .inSeconds
+              .clamp(0, 86400);
+    final elapsed =
+        '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
+    return Column(
+      key: const ValueKey('catalog-progress-hongguo'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 6),
+        Text('本轮已读取 ${scan.pages} 页 · 本次新增 ${status.added} 部'),
+        Wrap(
+          spacing: 12,
+          runSpacing: 4,
+          children: [
+            for (final feed in scan.feeds)
+              Text(
+                '${feed.name} ${feed.pages} 页${feed.exhausted ? '（已结束）' : ''}',
+              ),
+          ],
+        ),
+        Text(
+          '已用时 $elapsed${status.deadlineAt == null ? '' : ' · 本次限时至 ${sourceTimestamp(status.deadlineAt)}'}',
+        ),
+        const Text('总页数未知，读完或达到本次时限后停止；可随时停止，下次继续。'),
+      ],
     );
   }
 }
